@@ -4,8 +4,10 @@ import torch
 from models import ThroughputPredictor
 from tqdm import tqdm
 import argparse
+import os
 
 def train(checkpoint:str):
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     dataset = TrafficDataset('data/100M50ms_bbr_Dldataset_202310.csv')
 
     # split train and test data
@@ -16,7 +18,7 @@ def train(checkpoint:str):
     test_dataloader = DataLoader(test_dataset, batch_size=2, shuffle=True)
 
     # define model
-    model = ThroughputPredictor(5, 1, 2, 2,2048)
+    model = ThroughputPredictor(5, 1, 2, 2,2048).to(device)
     
     start_epoch = 0
     if checkpoint:
@@ -28,22 +30,29 @@ def train(checkpoint:str):
     criterion = torch.nn.MSELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 
-    num_epochs = 10
+    num_epochs = 100000
     # train
     for epoch in range(start_epoch, num_epochs):
         pbar = tqdm(enumerate(train_dataloader), total=len(train_dataloader))
-        for i, (src, tgt) in pbar:
-            optimizer.zero_grad()
+        for i, (src, tgt, y) in pbar:
+            src, tgt, y = src.to(device), tgt.to(device), y.to(device)
             src = src.permute(1, 0, 2)
             tgt = tgt.permute(1, 0, 2)
             output = model(src, tgt)
-            loss = criterion(output, tgt)
+            optimizer.zero_grad()
+            loss = criterion(output, y)
             loss.backward()
             optimizer.step()
-            pbar.set_description('Epoch: {}; Loss: {:.4f}'.format(epoch, loss.item()))
+            pbar.set_description('Epoch: {}'.format(epoch, loss.item()))
+            pbar.set_postfix(loss=loss.item())
 
-        # save checkpoint
-        torch.save(model.state_dict(), 'saved_models/throughput/epoch_{}.pth'.format(epoch))
+        # save only loss less than 1
+        if loss.item() < 1:
+            # save checkpoint
+            save_path = 'saved_models/throughput'
+            if not os.path.exists(save_path):
+                os.makedirs(save_path)
+            torch.save(model.state_dict(), save_path + '/throughput_{}.pth'.format(epoch))
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
