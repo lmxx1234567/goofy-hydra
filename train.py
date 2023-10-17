@@ -9,17 +9,17 @@ import os
 
 def train(checkpoint: str):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    dataset = TrafficDataset("data/100M50ms_bbr_Dldataset_202310.csv")
+    dataset = TrafficDataset("data/csvfile")
 
     # split train and test data
     train_size = int(0.8 * len(dataset))
     test_size = len(dataset) - train_size
     train_dataset, test_dataset = random_split(dataset, [train_size, test_size])
-    train_dataloader = DataLoader(dataset, batch_size=16, shuffle=True)
+    train_dataloader = DataLoader(dataset, batch_size=8, shuffle=True)
     test_dataloader = DataLoader(test_dataset, batch_size=2, shuffle=True)
 
     # define model
-    model = ThroughputPredictor(5, 256, 2, 2, 2, 2048).to(device)
+    model = ThroughputPredictor(8, 256, 2, 2, 2, 2048).to(device)
 
     start_epoch = 0
     if checkpoint:
@@ -47,8 +47,8 @@ def train(checkpoint: str):
             pbar.set_description("Epoch: {}".format(epoch, loss.item()))
             pbar.set_postfix(loss=loss.item())
 
-        # save only loss less than 1
-        if loss.item() < 1:
+        # save only loss less than 1e-2
+        if loss.item() < 1e-2:
             # save checkpoint
             save_path = "saved_models/throughput"
             if not os.path.exists(save_path):
