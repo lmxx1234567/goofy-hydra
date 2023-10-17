@@ -2,19 +2,24 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 class ThroughputPredictor(nn.Module):
-    def __init__(self, d_model, nhead, num_encoder_layers, num_decoder_layers, dim_feedforward):
+    def __init__(self, d_model, nhead, num_encoder_layers, num_decoder_layers, dim_feedforward, seq_len=100):
         super(ThroughputPredictor, self).__init__()
         self.transformer = nn.Transformer(
             d_model, nhead, num_encoder_layers, num_decoder_layers, dim_feedforward
         )
-        self.fc_out = nn.Linear(d_model, 1)  # Assuming the output is a single value per timestep
+        self.fc_out = nn.Linear(d_model*seq_len, 1)  # Assuming the output is a single value per timestep
 
     def forward(self, src, tgt=None):
         # If tgt is None, use the last value of src as the start of the tgt sequence
         if tgt is None:
             tgt = src[-1:, :, :]  # Assume the last value of src is the start of the tgt sequence
 
-        transformer_output = self.transformer(src, tgt)
+        transformer_output = self.transformer(src, tgt) # (seq_len, batch_size, d_model)
+
+        # Flatten the output to (batchsize, seq_len*d_model) before the linear layer
+        transformer_output = transformer_output.permute(1, 0, 2).contiguous()
+        transformer_output = transformer_output.view(transformer_output.size(0), -1)
+
         output = self.fc_out(transformer_output)
         return output
     
