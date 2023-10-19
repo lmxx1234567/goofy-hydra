@@ -3,10 +3,19 @@ from torch.utils.data import Dataset, DataLoader
 import csv
 import math
 import os
+import numpy as np
 
 
 class TrafficDataset(Dataset):
-    def __init__(self, csv_file_dir, src_len=100, tgt_len=100, input_cols=8, output_col=-1):
+    def __init__(
+        self,
+        csv_file_dir,
+        src_len=100,
+        tgt_len=100,
+        input_cols=8,
+        output_col=-1,
+        normalize=True,
+    ):
         """
         Initialize the dataset.
 
@@ -31,6 +40,14 @@ class TrafficDataset(Dataset):
                     reader = csv.reader(f)
                     self.data.extend(list(self._get_data(reader)))
 
+        self.normalize = normalize
+        self.mean = [0.0 for _ in range(input_cols)]
+        self.std = [1.0 for _ in range(input_cols)]
+
+        if self.normalize:
+            self._compute_normalization_params()
+            self._normalize_data()
+
     def __getitem__(self, index):
         src_start = index * self.src_len
         src_end = (index + 1) * self.src_len
@@ -53,14 +70,32 @@ class TrafficDataset(Dataset):
 
     def __len__(self):
         return math.floor((len(self.data) - self.tgt_len) / self.src_len)
-    
-    def _get_data(self,reader):
-        next(reader) # Skip header
+
+    def _get_data(self, reader):
+        next(reader)  # Skip header
         # remove incomplete data
         rows = list(reader)
         length = math.floor((len(rows) - self.tgt_len) / self.src_len) * self.src_len
         rows = rows[:length]
         return rows
+
+    def _compute_normalization_params(self):
+        # Compute mean and standard deviation for each column
+        all_data = [row[: self.input_cols] for row in self.data]
+        numpy_data = np.array(all_data, dtype=float)
+        self.mean = np.mean(numpy_data, axis=0).tolist()
+        self.std = np.std(numpy_data, axis=0).tolist()
+
+    def _normalize_data(self):
+        for row in self.data:
+            for i in range(self.input_cols):
+                if self.std[i] != 0:
+                    row[i] = (float(row[i]) - self.mean[i]) / self.std[i]
+            row[self.output_col] = float(row[self.output_col]) / 1e6
+
+    def get_normalization_params(self):
+        return self.mean, self.std
+
 
 if __name__ == "__main__":
     dataset = TrafficDataset("data/csvfile")

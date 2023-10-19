@@ -19,17 +19,18 @@ def train(checkpoint: str):
     test_dataloader = DataLoader(test_dataset, batch_size=2, shuffle=True)
 
     # define model
-    model = ThroughputPredictor(8, 256, 2, 2, 2, 2048).to(device)
+    model = ThroughputPredictor(8, 256, 4, 3, 3, 2048).to(device)
 
     start_epoch = 0
     if checkpoint:
-        model.load_state_dict(torch.load(checkpoint))
+        checkpoint = torch.load(checkpoint)
+        model.load_state_dict(checkpoint["model"])
         # get epoch from checkpoint
         start_epoch = int(checkpoint.split("_")[-1].split(".")[0])
 
     # define loss function
     criterion = torch.nn.MSELoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-2)
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
 
     num_epochs = 10000
     # train
@@ -49,13 +50,19 @@ def train(checkpoint: str):
 
         # save only loss less than 1e-2
         if loss.item() < 1e-2:
-            # save checkpoint
-            save_path = "saved_models/throughput"
-            if not os.path.exists(save_path):
-                os.makedirs(save_path)
-            torch.save(
-                model.state_dict(), save_path + "/throughput_{}.pth".format(epoch)
-            )
+            save_checkpoint(model, epoch, dataset)
+
+    save_checkpoint(model, num_epochs)
+
+
+def save_checkpoint(model, epoch, dataset):
+    mean, std = dataset.get_normalization_params()
+    save_path = "saved_models/throughput"
+    if not os.path.exists(save_path):
+        os.makedirs(save_path)
+    # save model and normalization params
+    checkpoint = {"model": model.state_dict(), "mean": mean, "std": std}
+    torch.save(checkpoint, os.path.join(save_path, "model_{}.pth".format(epoch)))
 
 
 if __name__ == "__main__":
