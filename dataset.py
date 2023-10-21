@@ -91,7 +91,7 @@ class TrafficDataset(Dataset):
             for i in range(self.input_cols):
                 if self.std[i] != 0:
                     row[i] = (float(row[i]) - self.mean[i]) / self.std[i]
-            row[self.output_col] = float(row[self.output_col]) / 1e6
+            row[self.output_col] = float(row[self.output_col]) / 1e7
 
     def get_normalization_params(self):
         return self.mean, self.std
