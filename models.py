@@ -2,32 +2,36 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch
 
+
 class ThroughputPredictor(nn.Module):
-    def __init__(self,in_features, d_model, nhead, num_encoder_layers, num_decoder_layers, dim_feedforward, seq_len=100):
+    def __init__(self, in_features, d_model, nhead, num_encoder_layers, num_decoder_layers, dim_feedforward, seq_len=100):
         super(ThroughputPredictor, self).__init__()
         self.linear_projection = nn.Linear(in_features, d_model)
         self.transformer = nn.Transformer(
-            d_model, nhead, num_encoder_layers, num_decoder_layers, dim_feedforward
+            d_model, nhead, num_encoder_layers, num_decoder_layers, dim_feedforward, batch_first=True
         )
-        self.fc_out = nn.Linear(d_model, 1)  # Assuming the output is a single value per timestep
+        # Assuming the output is a single value per timestep
+        self.fc_out = nn.Linear(d_model, 1)
 
     def forward(self, src, tgt=None):
-        src = self.linear_projection(src)  # (seq_len, batch_size, d_model)
-        # If tgt is None, use the last value of src as the start of the tgt sequence
+        src = self.linear_projection(src)  # (batch_size, seq_len, d_model)
         if tgt is None:
-            tgt = src[-1:, :, :]  # Assume the last value of src is the start of the tgt sequence
+            tgt = src
         else:
             tgt = self.linear_projection(tgt)
 
-        transformer_output = self.transformer(src, tgt) # (seq_len, batch_size, d_model)
+        transformer_output = self.transformer(
+            src, tgt)  # (batch_size, seq_len, d_model)
 
         # Use max pooling to convert the transformer output to a single vector per sequence
-        pooled_output = torch.max(transformer_output, dim=0)[0]  # (batch_size, d_model)
+        pooled_output = F.max_pool1d(transformer_output.transpose(
+            1, 2), transformer_output.shape[1]).squeeze(-1) # (batch_size, d_model)
 
         output = F.relu(self.fc_out(pooled_output), inplace=True)
 
         return output
-    
+
+
 class LinkSelector(nn.Module):
     def __init__(self, d_model, nhead, num_encoder_layers, dim_feedforward, num_links):
         super(LinkSelector, self).__init__()
@@ -35,8 +39,9 @@ class LinkSelector(nn.Module):
             nn.TransformerEncoderLayer(d_model, nhead, dim_feedforward),
             num_layers=num_encoder_layers
         )
-        self.fc_out = nn.Linear(d_model, num_links)  # Output a score for each link
-        
+        # Output a score for each link
+        self.fc_out = nn.Linear(d_model, num_links)
+
     def forward(self, src):
         # src shape: (1, link_num, 6)
         src = src.permute(1, 0, 2)  # Change shape to (link_num, 1, 6)
