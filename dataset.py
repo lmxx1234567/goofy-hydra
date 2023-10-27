@@ -15,6 +15,7 @@ class TrafficDataset(Dataset):
         input_cols=8,
         output_col=-1,
         normalize=True,
+        check_data=False,
     ):
         """
         Initialize the dataset.
@@ -30,6 +31,7 @@ class TrafficDataset(Dataset):
         self.tgt_len = tgt_len
         self.input_cols = input_cols
         self.output_col = output_col
+        self.check_data = check_data
 
         self.data = []
         # Read all csv file data into memory
@@ -38,7 +40,7 @@ class TrafficDataset(Dataset):
             if filename.endswith(".csv"):
                 with open(os.path.join(csv_file_dir, filename)) as f:
                     reader = csv.reader(f)
-                    self.data.extend(list(self._get_data(reader)))
+                    self.data.extend(list(self._get_data(reader, filename)))
 
         self.normalize = normalize
         self.mean = [0.0 for _ in range(input_cols)]
@@ -52,7 +54,8 @@ class TrafficDataset(Dataset):
         src_start = index * self.src_len
         src_end = (index + 1) * self.src_len
         tgt_start = src_end
-        tgt_end = min(tgt_start + self.tgt_len, len(self.data))  # Prevent IndexError
+        tgt_end = min(tgt_start + self.tgt_len,
+                      len(self.data))  # Prevent IndexError
 
         src = [
             [float(col) for col in row[: self.input_cols]]
@@ -71,13 +74,23 @@ class TrafficDataset(Dataset):
     def __len__(self):
         return math.floor((len(self.data) - self.tgt_len) / self.src_len)
 
-    def _get_data(self, reader):
+    def _get_data(self, reader, name):
         next(reader)  # Skip header
         # remove incomplete data
         rows = list(reader)
-        length = math.floor((len(rows) - self.tgt_len) / self.src_len) * self.src_len
+        length = math.floor((len(rows) - self.tgt_len) /
+                            self.src_len) * self.src_len
         rows = rows[:length]
+        if self.check_data:
+            self._validate_data(name, rows)
         return rows
+
+    def _validate_data(self, file_name, rows):
+        try:
+            np.array(rows, dtype=float)
+        except ValueError:
+            print("Error: {} contains non-numeric data".format(file_name))
+        pass
 
     def _compute_normalization_params(self):
         # Compute mean and standard deviation for each column
@@ -91,14 +104,14 @@ class TrafficDataset(Dataset):
             for i in range(self.input_cols):
                 if self.std[i] != 0:
                     row[i] = (float(row[i]) - self.mean[i]) / self.std[i]
-            row[self.output_col] = float(row[self.output_col]) / 1e7
+            row[self.output_col] = float(row[self.output_col]) / 1e6
 
     def get_normalization_params(self):
         return self.mean, self.std
 
 
 if __name__ == "__main__":
-    dataset = TrafficDataset("data/csvfile")
+    dataset = TrafficDataset("data/")
     dataloader = DataLoader(dataset, batch_size=1, shuffle=True)
     for i, (src, tgt, output) in enumerate(dataloader):
         print(src)
