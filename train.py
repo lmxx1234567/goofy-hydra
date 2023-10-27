@@ -6,25 +6,34 @@ from tqdm import tqdm
 import argparse
 import os
 
-
 def train(checkpoint: str, save_path="saved_models/throughput"):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    dataset = TrafficDataset("data/csvfile")
+    dataset = TrafficDataset("data/")
+
+    # define model
+    model = ThroughputPredictor(8, 256, 4, 3, 3, 2048)
+    # If multiple GPUs are available, use DataParallel
+    if torch.cuda.device_count() > 1:
+        print(f"Let's use {torch.cuda.device_count()} GPUs!")
+        model = torch.nn.DataParallel(model)
+    model.to(device)
 
     # split train and test data
     train_size = int(0.9 * len(dataset))
     test_size = len(dataset) - train_size
     train_dataset, test_dataset = random_split(dataset, [train_size, test_size])
-    train_dataloader = DataLoader(train_dataset, batch_size=8, shuffle=True)
-    test_dataloader = DataLoader(test_dataset, batch_size=8, shuffle=True)
-
-    # define model
-    model = ThroughputPredictor(8, 64, 4, 3, 3, 2048).to(device)
+    batch_size = 8  
+    train_dataloader = DataLoader(train_dataset, batch_size=batch_size * torch.cuda.device_count(), shuffle=True)
+    test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=True)
 
     start_epoch = 0
     if checkpoint:
-        checkpoint = torch.load(checkpoint)
-        model.load_state_dict(checkpoint["model"])
+        checkpoint_data = torch.load(checkpoint)
+        # Careful handling of DataParallel model structure
+        if isinstance(model, torch.nn.DataParallel):
+            model.module.load_state_dict(checkpoint_data["model"])
+        else:
+            model.load_state_dict(checkpoint_data["model"])
         # get epoch from checkpoint
         start_epoch = int(checkpoint.split("_")[-1].split(".")[0])
         save_path = os.path.dirname(checkpoint)
@@ -41,8 +50,6 @@ def train(checkpoint: str, save_path="saved_models/throughput"):
         train_loss = 0
         for src, tgt, y in train_dataloader:
             src, tgt, y = src.to(device), tgt.to(device), y.to(device)
-            src = src.permute(1, 0, 2)
-            tgt = tgt.permute(1, 0, 2)
             output = model(src, tgt)
             optimizer.zero_grad()
             loss = criterion(output, y)
@@ -65,8 +72,6 @@ def train(checkpoint: str, save_path="saved_models/throughput"):
         with torch.no_grad():
             for src, tgt, y in test_dataloader:
                 src, tgt, y = src.to(device), tgt.to(device), y.to(device)
-                src = src.permute(1, 0, 2)
-                tgt = tgt.permute(1, 0, 2)
                 output = model(src, tgt)
                 step_loss = criterion(output, y).item()
                 test_loss += step_loss
@@ -88,11 +93,17 @@ def train(checkpoint: str, save_path="saved_models/throughput"):
 
 def save_checkpoint(model, epoch, dataset, save_path="saved_models/throughput"):
     mean, std = dataset.get_normalization_params()
-    save_path = "saved_models/throughput"
     if not os.path.exists(save_path):
         os.makedirs(save_path)
+
+    # If the model is an instance of DataParallel, get the 'module' which contains the original model
+    if isinstance(model, torch.nn.DataParallel):
+        model_to_save = model.module
+    else:
+        model_to_save = model
+
     # save model and normalization params
-    checkpoint = {"model": model.state_dict(), "mean": mean, "std": std}
+    checkpoint = {"model": model_to_save.state_dict(), "mean": mean, "std": std}
     torch.save(checkpoint, os.path.join(save_path, "model_{}.pth".format(epoch)))
 
 
