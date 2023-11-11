@@ -54,8 +54,7 @@ class TrafficDataset(Dataset):
         src_start = index * self.src_len
         src_end = (index + 1) * self.src_len
         tgt_start = src_end
-        tgt_end = min(tgt_start + self.tgt_len,
-                      len(self.data))  # Prevent IndexError
+        tgt_end = min(tgt_start + self.tgt_len, len(self.data))  # Prevent IndexError
 
         src = [
             [float(col) for col in row[: self.input_cols]]
@@ -78,8 +77,7 @@ class TrafficDataset(Dataset):
         next(reader)  # Skip header
         # remove incomplete data
         rows = list(reader)
-        length = math.floor((len(rows) - self.tgt_len) /
-                            self.src_len) * self.src_len
+        length = math.floor((len(rows) - self.tgt_len) / self.src_len) * self.src_len
         rows = rows[:length]
         if self.check_data:
             self._validate_data(name, rows)
@@ -104,15 +102,19 @@ class TrafficDataset(Dataset):
             for i in range(self.input_cols):
                 if self.std[i] != 0:
                     row[i] = (float(row[i]) - self.mean[i]) / self.std[i]
-            row[self.output_col] = float(row[self.output_col]) / 1e6
+            row[self.output_col] = float(row[self.output_col]) / 100
 
     def get_normalization_params(self):
         return self.mean, self.std
 
 
 if __name__ == "__main__":
-    dataset = TrafficDataset("data/")
-    dataloader = DataLoader(dataset, batch_size=1, shuffle=True)
+    dataset = TrafficDataset("data/chgebw", check_data=True)
+    dataloader = DataLoader(
+        dataset,
+        batch_size=1,
+        shuffle=True,
+    )
     for i, (src, tgt, output) in enumerate(dataloader):
         print(src)
         print(tgt)
