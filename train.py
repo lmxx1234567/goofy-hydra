@@ -1,17 +1,22 @@
 from dataset import TrafficDataset
 from torch.utils.data import DataLoader, random_split
 import torch
-from models import ThroughputPredictor
+from models import ThroughputPredictor,ThroughputPredictorLiner
 from tqdm import tqdm
 import argparse
 import os
+from torch.utils.tensorboard import SummaryWriter
 
 def train(checkpoint: str, save_path="saved_models/throughput"):
+    # init writer
+    writer = SummaryWriter()
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    dataset = TrafficDataset("data/")
+    dataset = TrafficDataset("data/chgebw")
 
     # define model
     model = ThroughputPredictor(8, 256, 4, 3, 3, 2048)
+    # model = ThroughputPredictorLiner(8, 256)
     # If multiple GPUs are available, use DataParallel
     if torch.cuda.device_count() > 1:
         print(f"Let's use {torch.cuda.device_count()} GPUs!")
@@ -40,9 +45,9 @@ def train(checkpoint: str, save_path="saved_models/throughput"):
 
     # define loss function
     criterion = torch.nn.MSELoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
-    num_epochs = 10000
+    num_epochs = 1000
     for epoch in range(start_epoch, num_epochs):
         pbar = tqdm(total=len(train_dataloader), desc="Training Epoch: {}".format(epoch))
         
@@ -50,7 +55,7 @@ def train(checkpoint: str, save_path="saved_models/throughput"):
         train_loss = 0
         for src, tgt, y in train_dataloader:
             src, tgt, y = src.to(device), tgt.to(device), y.to(device)
-            output = model(src, tgt)
+            output = model(src)
             optimizer.zero_grad()
             loss = criterion(output, y)
             loss.backward()
@@ -81,12 +86,15 @@ def train(checkpoint: str, save_path="saved_models/throughput"):
         test_loss /= len(test_dataloader)
         pbar.set_postfix(loss=train_loss,test_loss=test_loss)
         pbar.close()
+       
+        writer.add_scalar('Loss/Train', train_loss, epoch)
+        writer.add_scalar('Loss/Test', test_loss, epoch)
 
             
-        # save only loss less than 1e-2
-        if train_loss < 1e-2:
+        # save only loss less than 1e-4
+        if train_loss < 1e-3:
             save_checkpoint(model, epoch, dataset, save_path)
-            break
+            return
 
     save_checkpoint(model, num_epochs, dataset, save_path)
 
