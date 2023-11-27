@@ -5,14 +5,17 @@ from models import SharedStateFeatureExtractor
 from tqdm import tqdm
 import argparse
 import os
+from torch.utils.tensorboard import SummaryWriter
 
 
-def train(checkpoint: str, save_path="saved_models/throughput"):
+def train(checkpoint: str, save_path="saved_models/pretrain"):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    dataset = TrafficDataset("data/chgebw")
+    src_len, tgt_len = 100, 100
+    dataset = TrafficDataset("data/chgebw", src_len=src_len, tgt_len=tgt_len)
 
     # define model
     model = SharedStateFeatureExtractor(8, 512, 8, 6, 6, 2048)
+    model.set_pretraining(True)
     # If multiple GPUs are available, use DataParallel
     if torch.cuda.device_count() > 1:
         print(f"Let's use {torch.cuda.device_count()} GPUs!")
@@ -23,7 +26,7 @@ def train(checkpoint: str, save_path="saved_models/throughput"):
     train_size = int(0.9 * len(dataset))
     test_size = len(dataset) - train_size
     train_dataset, test_dataset = random_split(dataset, [train_size, test_size])
-    batch_size = 8
+    batch_size = 32
     train_dataloader = DataLoader(
         train_dataset, batch_size=batch_size * torch.cuda.device_count(), shuffle=True
     )
@@ -40,12 +43,19 @@ def train(checkpoint: str, save_path="saved_models/throughput"):
         # get epoch from checkpoint
         start_epoch = int(checkpoint.split("_")[-1].split(".")[0])
         save_path = os.path.dirname(checkpoint)
+    else:
+        model.init_weights(torch.nn.init.xavier_uniform_)
 
     # define loss function
     criterion = torch.nn.MSELoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.1)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=918, gamma=0.1)
+
+    # generate tgt mask
+    tgt_mask = model.transformer.generate_square_subsequent_mask(tgt_len).to(device)
 
     num_epochs = 1000
+    writer = SummaryWriter("runs/pretrain")
     for epoch in range(start_epoch, num_epochs):
         pbar = tqdm(
             total=len(train_dataloader), desc="Training Epoch: {}".format(epoch)
@@ -55,10 +65,9 @@ def train(checkpoint: str, save_path="saved_models/throughput"):
         train_loss = 0
         for src, tgt, y in train_dataloader:
             src, tgt = src.to(device), tgt.to(device)
-            output = model(src, tgt)
-            tgt_out = model.linear_projection(tgt)
+            output = model(src, tgt, tgt_mask=tgt_mask)
             optimizer.zero_grad()
-            loss = criterion(tgt_out, output)
+            loss = criterion(output, tgt)
             loss.backward()
             optimizer.step()
 
@@ -67,20 +76,29 @@ def train(checkpoint: str, save_path="saved_models/throughput"):
             pbar.update(1)  # manually update progress bar by 1
             pbar.set_postfix(loss=step_loss)
 
+            if torch.isnan(loss).any() or torch.isinf(loss).any():
+                print("Loss is inf or nan")
+                print("loss is nan: {}".format(torch.isnan(loss).any()))
+                print("loss is inf: {}".format(torch.isinf(loss).any()))
+                print("output is nan: {}".format(torch.isnan(output).any()))
+                print("output is inf: {}".format(torch.isinf(output).any()))
+                return
+
         train_loss /= len(train_dataloader)
 
         pbar.n = 0  # Reset progress
         pbar.total = len(test_dataloader)
         pbar.set_description("Testing Epoch: {}".format(epoch))
 
+        scheduler.step()
+
         # test
         test_loss = 0
         with torch.no_grad():
             for src, tgt, y in test_dataloader:
                 src, tgt = src.to(device), tgt.to(device)
-                tgt_out = model.linear_projection(tgt)
                 output = model(src, tgt)
-                step_loss = criterion(tgt_out, output).item()
+                step_loss = criterion(output, tgt).item()
                 test_loss += step_loss
                 pbar.set_postfix(loss=step_loss)
                 pbar.update(1)  # manually update progress bar by 1
@@ -89,8 +107,16 @@ def train(checkpoint: str, save_path="saved_models/throughput"):
         pbar.set_postfix(loss=train_loss, test_loss=test_loss)
         pbar.close()
 
-        # save only loss less than 1e-4
-        if train_loss < 1e-3:
+        writer.add_scalar("Loss/Train", train_loss, epoch)
+        writer.add_scalar("Loss/Test", test_loss, epoch)
+        writer.add_scalar("Learning Rate", scheduler.get_last_lr()[0], epoch)
+
+        # save every 50 epoch
+        if epoch % 50 == 0:
+            save_checkpoint(model, epoch, dataset, save_path)
+
+        # save when loss less than 1e-4
+        if train_loss < 1e-4:
             save_checkpoint(model, epoch, dataset, save_path)
             return
 
