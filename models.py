@@ -14,6 +14,7 @@ class SharedStateFeatureExtractor(nn.Module):  # SSFE
         dim_feedforward,
     ):
         super(SharedStateFeatureExtractor, self).__init__()
+        self._is_pretraining = False
         self.linear_projection = nn.Linear(in_features, d_model)
 
         self.transformer = nn.Transformer(
@@ -25,19 +26,20 @@ class SharedStateFeatureExtractor(nn.Module):  # SSFE
             batch_first=True,
         )
 
-    def forward(self, src, tgt=None):
+        self.fc = nn.Linear(d_model, in_features)  # fc for pretraining
+
+    def forward(self, src, tgt, tgt_mask=None, tgt_is_causal=None):
         src = self.linear_projection(src)  # (batch_size, seq_len, in_features)
+        tgt = self.linear_projection(tgt)  # (batch_size, seq_len, in_features)
         tgt_mask, tgt_is_causal = None, None
-        if tgt is None:
-            tgt = src
-        else:
-            tgt = self.linear_projection(tgt)
-            tgt_mask = self.transformer.generate_square_subsequent_mask(len(tgt))
-            tgt_is_causal = True
 
         output = self.transformer(
             src, tgt, tgt_mask=tgt_mask, tgt_is_causal=tgt_is_causal
         )  # (batch_size, seq_len, d_model)
+
+        # Use liner to convert the transformer output to tgt shape for pretraining
+        if self._is_pretraining:
+            output = self.fc(output)  # (batch_size, seq_len, in_features)
         return output
 
     _instance = None
@@ -64,10 +66,20 @@ class SharedStateFeatureExtractor(nn.Module):  # SSFE
         return cls._instance
 
     def set_grad_requires(self, requires_grad):
-        for param in self.linear_projection.parameters():
-            param.requires_grad = requires_grad
-        for param in self.transformer.parameters():
-            param.requires_grad = requires_grad
+        for p in self.parameters():
+            p.requires_grad = requires_grad
+
+    def set_pretraining(self, is_pretraining: bool):
+        self._is_pretraining = is_pretraining
+
+    def init_weights(self, init_fn):
+        """
+        Initialize model weights.
+        :param init_fn: Function to use for weight initialization.
+        """
+        for p in self.parameters():
+            if p.dim() > 1:
+                init_fn(p)
 
 
 class ThroughputPredictor(nn.Module):
