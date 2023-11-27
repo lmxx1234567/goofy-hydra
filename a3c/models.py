@@ -95,7 +95,7 @@ class TrafficScheduler(nn.Module):
         fc_out = self.fc0(features)
         output = self.fc1(fc_out)
 
-        output = torch.sigmoid(output)  # (batch_size, seq_len, 3)
+        output = torch.softmax(output, dim=-1) # (batch_size, seq_len, 3)
         return output
 
 
@@ -147,13 +147,10 @@ class StateValueCritic(nn.Module):
 
 if __name__ == "__main__":
     # Test the model
-    trafficScheduler = TrafficScheduler(19, 256, 8, 3, 3, 2048)
-    src = torch.rand(1, 100, 19)
+    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+    trafficScheduler = TrafficScheduler(19, 256, 8, 3, 3, 2048).to(device)
+    src = torch.zeros(1, 100, 19).to(device)
     output = trafficScheduler(src)
-    print(output.shape)
-
-    stateValueCritic = StateValueCritic(19, 256, 8, 3, 3, 2048)
-    output = stateValueCritic(src)
     print(output.shape)
 
     # save model
@@ -161,17 +158,11 @@ if __name__ == "__main__":
 
     if not os.path.exists("saved_models/trafficScheduler"):
         os.makedirs("saved_models/trafficScheduler")
-    if not os.path.exists("saved_models/stateValueCritic"):
-        os.makedirs("saved_models/stateValueCritic")
+
     torch.save(
         trafficScheduler.state_dict(), "saved_models/trafficScheduler/untrained.pt"
-    )
-    torch.save(
-        stateValueCritic.state_dict(), "saved_models/stateValueCritic/untrained.pt"
     )
 
     # save traced model
     traced_script_module = torch.jit.trace(trafficScheduler, src)
     traced_script_module.save("saved_models/trafficScheduler/untrain_traced.pt")
-    traced_script_module = torch.jit.trace(stateValueCritic, src)
-    traced_script_module.save("saved_models/stateValueCritic/untrain_traced.pt")
