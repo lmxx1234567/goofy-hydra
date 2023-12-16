@@ -7,6 +7,7 @@ sys.path.append(os.path.dirname(SCRIPT_DIR))
 import torch
 from torch.distributions import Categorical
 from a3c.models import TrafficScheduler, StateValueCritic
+from a3c.dataset import A2CDataSet
 
 
 def training():
@@ -18,8 +19,10 @@ def training():
     shared_state_feature_extractor = state_value_critic.state_feature_extractor
 
     # load data
-    batch_size = 8
-    pass
+    batch_size = 32
+    dataset = A2CDataSet("data/DL2-40M40ms-90M90ms_82_bbr_202310.csv")
+    dataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True)
+    
 
     # define loss function
     criterion_critic = torch.nn.MSELoss()

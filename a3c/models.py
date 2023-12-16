@@ -83,16 +83,11 @@ class TrafficScheduler(nn.Module):
             dim_feedforward,
         )
 
-        self.fc0 = nn.Linear(d_model, d_model // 2)
-        self.fc1 = nn.Linear(d_model // 2, 3)
+        self.fc0 = nn.Linear(in_features, in_features // 2)
+        self.fc1 = nn.Linear(in_features // 2, 3)
 
-    def forward(self, src, tgt=None):
-        if tgt is None:
-            tgt = src
-
-        features = self.state_feature_extractor(src)  # (batch_size, seq_len, d_model)
-
-        fc_out = self.fc0(features)
+    def forward(self, src):
+        fc_out = self.fc0(src)
         output = self.fc1(fc_out)
 
         output = torch.softmax(output, dim=-1) # (batch_size, seq_len, 3)
@@ -119,26 +114,11 @@ class StateValueCritic(nn.Module):
             dim_feedforward,
         )
 
-        self.fc0 = nn.Linear(d_model, d_model // 2)
-        self.fc1 = nn.Linear(d_model // 2, 1)
+        self.fc0 = nn.Linear(in_features, in_features // 2)
+        self.fc1 = nn.Linear(in_features // 2, 1)
 
-    def forward(self, src, tgt=None):
-        if tgt is None:
-            tgt = src
-
-        features = self.state_feature_extractor(src)  # (batch_size, seq_len, d_model)
-
-        # Use max pooling to convert the transformer output to a single vector per sequence
-        seq_len = features.shape[1]
-        if torch.is_tensor(seq_len): # for tracing
-            seq_len = seq_len.item()
-        pooled_output = F.max_pool1d(
-            features.transpose(1, 2), seq_len
-        ).squeeze(
-            -1
-        )  # (batch_size, d_model)
-
-        fc_out = self.fc0(pooled_output)  # (batch_size, d_model//2)
+    def forward(self, src):
+        fc_out = self.fc0(src)  # (batch_size, in_features//2)
         output = self.fc1(fc_out)  # (batch_size, 1)
 
         output = F.relu(output, inplace=True)  # (batch_size, 1)
@@ -151,18 +131,10 @@ if __name__ == "__main__":
     trafficScheduler = TrafficScheduler(19, 256, 8, 3, 3, 2048).to(device)
     src = torch.zeros(1, 100, 19).to(device)
     output = trafficScheduler(src)
+    print(output)
     print(output.shape)
 
-    # save model
-    import os
-
-    if not os.path.exists("saved_models/trafficScheduler"):
-        os.makedirs("saved_models/trafficScheduler")
-
-    torch.save(
-        trafficScheduler.state_dict(), "saved_models/trafficScheduler/untrained.pt"
-    )
-
-    # save traced model
-    traced_script_module = torch.jit.trace(trafficScheduler, src)
-    traced_script_module.save("saved_models/trafficScheduler/untrain_traced.pt")
+    stateValueCritic = StateValueCritic(19, 256, 8, 3, 3, 2048).to(device)
+    output = stateValueCritic(src)
+    print(output)
+    print(output.shape)
