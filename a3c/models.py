@@ -84,13 +84,13 @@ class TrafficScheduler(nn.Module):
         )
 
         self.fc0 = nn.Linear(in_features, in_features // 2)
-        self.fc1 = nn.Linear(in_features // 2, 3)
+        self.fc1 = nn.Linear(in_features // 2, 2)
 
     def forward(self, src):
         fc_out = self.fc0(src)
         output = self.fc1(fc_out)
 
-        output = torch.softmax(output, dim=-1) # (batch_size, seq_len, 3)
+        output = torch.softmax(output, dim=-1)  # (batch_size, seq_len, 2)
         return output
 
 
@@ -103,6 +103,7 @@ class StateValueCritic(nn.Module):
         num_encoder_layers,
         num_decoder_layers,
         dim_feedforward,
+        seq_len=100,
     ):
         super(StateValueCritic, self).__init__()
         self.state_feature_extractor = SharedStateFeatureExtractor.get_instance(
@@ -114,11 +115,16 @@ class StateValueCritic(nn.Module):
             dim_feedforward,
         )
 
-        self.fc0 = nn.Linear(in_features, in_features // 2)
-        self.fc1 = nn.Linear(in_features // 2, 1)
+        self.seq_len = seq_len
+
+        self.fc0 = nn.Linear(in_features * seq_len, in_features * seq_len // 2)
+        self.fc1 = nn.Linear(in_features * seq_len // 2, 1)
 
     def forward(self, src):
-        fc_out = self.fc0(src)  # (batch_size, in_features//2)
+        src = src.reshape(
+            -1, self.seq_len * src.shape[-1]
+        )  # (batch_size, seq_len* in_features)
+        fc_out = self.fc0(src)  # (batch_size, seq_len * in_features // 2)
         output = self.fc1(fc_out)  # (batch_size, 1)
 
         output = F.relu(output, inplace=True)  # (batch_size, 1)
