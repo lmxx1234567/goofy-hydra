@@ -31,7 +31,9 @@ class A2CDataSet(Dataset):
         ],
         reward_cols: List[str] = ["reward"],
         src_len=100,
+        n_td=3,
     ):
+        self.n_td = n_td
         pd_data = pd.read_csv(csv_file_dir)
         self.data_length = pd_data.shape[0] // src_len
 
@@ -44,15 +46,17 @@ class A2CDataSet(Dataset):
     def __getitem__(self, index):
         return (
             torch.Tensor(self.state_data[index]),
-            torch.Tensor(self.state_data[index + 1]),
-            torch.Tensor(self.reward_data[index + 1]),
+            torch.Tensor(self.state_data[index + self.n_td]),
+            torch.Tensor(self.reward_data[index + 1 : index + self.n_td + 1][:, 0]),
         )
 
     def __len__(self):
-        return self.data_length - 1
+        return self.data_length - max(1, self.n_td + 1)
 
 
 if __name__ == "__main__":
     dataset = A2CDataSet("data/DL2-40M40ms-90M90ms_82_bbr_202310.csv")
     print(len(dataset))
     print(dataset[0][0].shape)
+    print(dataset[0][1].shape)
+    print(dataset[0][2].shape)
