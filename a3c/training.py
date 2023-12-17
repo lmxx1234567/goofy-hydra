@@ -5,7 +5,8 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(os.path.dirname(SCRIPT_DIR))
 
 import torch
-from torch.distributions import Categorical
+from torch.utils.data import DataLoader
+from torch.distributions import Categorical, Bernoulli
 from a3c.models import TrafficScheduler, StateValueCritic
 from a3c.dataset import A2CDataSet
 
@@ -19,52 +20,58 @@ def training():
     shared_state_feature_extractor = state_value_critic.state_feature_extractor
 
     # load data
-    batch_size = 32
     dataset = A2CDataSet("data/DL2-40M40ms-90M90ms_82_bbr_202310.csv")
-    dataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True)
-    
+    dataloader = DataLoader(dataset)
 
-    # define loss function
-    criterion_critic = torch.nn.MSELoss()
+    # define loss function and hyperparameters
+    alpha_scheduler = 0.1
     optimizer_scheduler = torch.optim.Adam(traffic_scheduler.parameters(), lr=1e-3)
     optimizer_critic = torch.optim.Adam(state_value_critic.parameters(), lr=1e-3)
 
     # train loop
     start_episode = 0
     num_episodes = 1000
+    reward_expectation = 0
+
     for episode in range(start_episode, num_episodes):
-        episode_reward = 0
         episode_loss_scheduler = 0
         episode_loss_critic = 0
-        num_steps = 60
+        reward_expectation = 0
 
-        for step in range(num_steps):
-             # read states. TODO: read from dataset
-            states,next_states = torch.randn(batch_size, 100, 19).to(dev),torch.randn(batch_size, 100, 19).to(dev)
+        for states, next_n_states, reward in dataloader:
+            states, next_n_states, reward = (
+                states.to(dev),  # (batch_size, seq_len, 19)
+                next_n_states.to(dev),  # (batch_size, seq_len, 19)
+                reward.to(dev),  # (batch_size, n_td, 1)
+            )
 
             # get actions
-            actions:torch.Tensor = traffic_scheduler(states) # (batch_size, 100, 3)
-            actions_dist = Categorical(actions)
-            actions = actions_dist.sample() # (batch_size, 100)
-            action_probs = actions_dist.log_prob(actions) # (batch_size, 100)
+            actions: torch.Tensor = traffic_scheduler(
+                states
+            )  # (batch_size, seq_len,  2)
+            action_probs: torch.Tensor = choose_action(
+                actions
+            )  # (batch_size, seq_len, 2) contains choose result by 0 or 1
+            action_probs = (
+                actions * action_probs
+            )  # (batch_size, seq_len, 2) contains choose result by probability
 
             # get state value
-            values = state_value_critic(states) # (batch_size, 1)
-            next_values = state_value_critic(next_states) # (batch_size, 1)
-
-            # get reward. TODO: read from dataset
-            reward = torch.randn(batch_size, 1).to(dev)
-            episode_reward += reward.item()
+            values = state_value_critic(states)  # (batch_size, 1)
+            next_n_values = state_value_critic(next_n_states)  # (batch_size, 1)
 
             # calculate loss
-            loss_critic = criterion_critic(values, reward + next_values)
-            td = reward + next_values - values # (batch_size, 1) temporal difference
-            td = td.detach()
-            loss_scheduler = -torch.mean(action_probs * td.unsqueeze(-1))
+            dt = torch.sum(reward - reward_expectation) + next_n_values - values
+            reward_expectation = reward_expectation + alpha_scheduler * dt
+
+            episode_loss_scheduler -= action_probs.apply_(
+                lambda x: torch.log(x) * dt**2
+            ).sum()
+            episode_loss_critic += dt**2
 
             # update loss
-            episode_loss_scheduler += loss_scheduler.item()
-            episode_loss_critic += loss_critic.item()
+            # episode_loss_scheduler += loss_scheduler.item()
+            # episode_loss_critic += loss_critic.item()
 
         # update model
         optimizer_scheduler.zero_grad()
@@ -75,6 +82,22 @@ def training():
         optimizer_critic.step()
 
         # save model
+
+
+def choose_action_vectorized(actions: torch.Tensor) -> torch.Tensor:
+    # Initialize a Bernoulli distribution with the actions tensor
+    action_distri = Bernoulli(actions)
+    action_probs = action_distri.sample()  # (batch_size, seq_len, 2)
+
+    # Check if both elements in the last dimension are zero using torch.all
+    zero_conditions = torch.all(action_probs == 0, dim=-1)
+
+    # Apply Categorical distribution where the mask is True
+    # Here, we sample and then mask the irrelevant samples
+    categorical_samples = Categorical(actions).sample((actions.size(0), actions.size(1)))
+    categorical_samples = torch.where(zero_conditions, categorical_samples, action_probs)
+
+    return categorical_samples
 
 
 
