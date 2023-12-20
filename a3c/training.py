@@ -49,7 +49,7 @@ def training():
             actions: torch.Tensor = traffic_scheduler(
                 states
             )  # (batch_size, seq_len,  2)
-            action_probs: torch.Tensor = choose_action(
+            action_probs: torch.Tensor = choose_action_vectorized(
                 actions
             )  # (batch_size, seq_len, 2) contains choose result by 0 or 1
             action_probs = (
@@ -94,12 +94,46 @@ def choose_action_vectorized(actions: torch.Tensor) -> torch.Tensor:
 
     # Apply Categorical distribution where the mask is True
     # Here, we sample and then mask the irrelevant samples
-    categorical_samples = Categorical(actions).sample((actions.size(0), actions.size(1)))
-    categorical_samples = torch.where(zero_conditions, categorical_samples, action_probs)
+    # categorical_samples = torch.where(zero_conditions, categorical_samples, action_probs)
+    
+    # Find the indices where zero_conditions is True
+    zero_indices = torch.nonzero(zero_conditions).squeeze()
+    is_empty = zero_indices.numel() == 0
+    if is_empty:
+        return action_probs
+    
+    # Ensure the tensor is in a list-like format for iteration
+    if zero_indices.ndim == 0:
+        zero_indices = torch.tensor([zero_indices])
+    
+    for i in zero_indices:
+        twice_action_probs = action_distri.sample()  # (batch_size, seq_len, 2)
+        action_probs[i] = twice_action_probs[i]
+    
+    # Find the indices where zero_conditions is True
+    zero_conditions = torch.all(action_probs == 0, dim=-1)
+    zero_indices = torch.nonzero(zero_conditions).squeeze()
+    is_empty = zero_indices.numel() == 0
+    if is_empty:
+        return action_probs
+    
+    # Ensure the tensor is in a list-like format for iteration
+    if zero_indices.ndim == 0:
+        zero_indices = torch.tensor([zero_indices])
 
-    return categorical_samples
+    categorical_samples = Categorical(actions).sample()
+    for i in zero_indices:
+        x = categorical_samples[i].item()  # Get the value of tensor2 at index i
+        action_probs[i][x] = torch.tensor(1)
 
+    return action_probs
 
+def test_action():
+    action = torch.tensor([[1.0000, 1.0000],
+                           [0.500, 0.0100],
+                           [0.0100, 0.0100]])
+    action_probs = choose_action_vectorized(action)
+    print(action_probs)
 
 if __name__ == "__main__":
     training()
