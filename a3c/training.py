@@ -10,9 +10,29 @@ from torch.distributions import Categorical, Bernoulli
 from a3c.models import TrafficScheduler, StateValueCritic
 from a3c.dataset import A2CDataSet
 
+def load_checkpoint(traffic_scheduler,state_value_critic):
+    # 模型文件的路径
+    scheduler_model_path = 'traffic_scheduler_model.pt'
+    critic_model_path = 'state_value_critic_model.pt'
+
+    # 检查 traffic_scheduler_model.pth 是否存在
+    if os.path.exists(scheduler_model_path):
+        # 如果文件存在，加载模型参数
+        traffic_scheduler.load_state_dict(torch.load(scheduler_model_path))
+        print("traffic_scheduler 模型已载入")
+    else:
+        print("traffic_scheduler 模型文件不存在，未载入模型")
+
+    # 检查 state_value_critic_model.pth 是否存在
+    if os.path.exists(critic_model_path):
+        # 如果文件存在，加载模型参数
+        state_value_critic.load_state_dict(torch.load(critic_model_path))
+        print("state_value_critic 模型已载入")
+    else:
+        print("state_value_critic 模型文件不存在，未载入模型")
 
 def training():
-    dev = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+    dev = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
 
     # define model
     traffic_scheduler = TrafficScheduler(19, 256, 4, 3, 3, 2048).to(dev)
@@ -30,7 +50,7 @@ def training():
 
     # train loop
     start_episode = 0
-    num_episodes = 1000
+    num_episodes = 1
     reward_expectation = 0
 
     for episode in range(start_episode, num_episodes):
@@ -39,6 +59,9 @@ def training():
         reward_expectation = 0
 
         for states, next_n_states, reward in dataloader:
+            episode_loss_scheduler = 0
+            episode_loss_critic = 0
+            reward_expectation = 0
             states, next_n_states, reward = (
                 states.to(dev),  # (batch_size, seq_len, 19)
                 next_n_states.to(dev),  # (batch_size, seq_len, 19)
@@ -50,8 +73,9 @@ def training():
                 states
             )  # (batch_size, seq_len,  2)
             action_probs: torch.Tensor = choose_action_vectorized(
-                actions
+                actions.squeeze(0)
             )  # (batch_size, seq_len, 2) contains choose result by 0 or 1
+            action_probs = action_probs.unsqueeze(0)
             action_probs = (
                 actions * action_probs
             )  # (batch_size, seq_len, 2) contains choose result by probability
@@ -64,25 +88,40 @@ def training():
             dt = torch.sum(reward - reward_expectation) + next_n_values - values
             reward_expectation = reward_expectation + alpha_scheduler * dt
 
-            episode_loss_scheduler -= action_probs.apply_(
-                lambda x: torch.log(x) * dt**2
-            ).sum()
-            episode_loss_critic += dt**2
+            log_action_probs = torch.log(action_probs[action_probs != 0]).sum()
+            episode_loss_scheduler = -log_action_probs * dt**2
 
+            episode_loss_critic = dt**2
+            print("episode_loss_scheduler:",episode_loss_scheduler,"\t episode_loss_critic:", episode_loss_critic)
+
+            # 检查是否满足保存模型的条件
+            if episode_loss_scheduler < 0.01 and episode_loss_critic < 0.01:
+                # 保存 traffic_scheduler 模型
+                torch.save(traffic_scheduler.state_dict(), 'traffic_scheduler_model.pt')
+
+                # 保存 state_value_critic 模型
+                torch.save(state_value_critic.state_dict(), 'state_value_critic_model.pt')
+
+                print("模型已保存，因为 episode_loss_scheduler < 1")
+                
             # update loss
             # episode_loss_scheduler += loss_scheduler.item()
             # episode_loss_critic += loss_critic.item()
 
-        # update model
-        optimizer_scheduler.zero_grad()
-        episode_loss_scheduler.backward()
-        optimizer_scheduler.step()
-        optimizer_critic.zero_grad()
-        episode_loss_critic.backward()
-        optimizer_critic.step()
+            # update model
+            optimizer_scheduler.zero_grad()
+            episode_loss_scheduler.backward(retain_graph = True)
+            optimizer_scheduler.step()
+
+            optimizer_critic.zero_grad()
+            episode_loss_critic.backward()
+            optimizer_critic.step()
 
         # save model
+        torch.save(traffic_scheduler.state_dict(), 'traffic_scheduler_model.pt')
 
+        # 保存 state_value_critic 模型
+        torch.save(state_value_critic.state_dict(), 'state_value_critic_model.pt')
 
 def choose_action_vectorized(actions: torch.Tensor) -> torch.Tensor:
     # Initialize a Bernoulli distribution with the actions tensor
