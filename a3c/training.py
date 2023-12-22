@@ -9,11 +9,24 @@ from torch.utils.data import DataLoader
 from torch.distributions import Categorical, Bernoulli
 from a3c.models import TrafficScheduler, StateValueCritic
 from a3c.dataset import A2CDataSet
+from a3c.load import load_checkpoint
+from a3c.reload import reload_model
 
-def load_checkpoint(traffic_scheduler,state_value_critic):
+
+def training(epsisode_input, dataset_path="data/DL2-40M40ms-90M90ms_82_bbr_202310.csv"):
+    print(epsisode_input, ",", dataset_path)
+    epsisode_last= (str)((int)(epsisode_input)-1)
+    dev = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
+
+    # define model
+    traffic_scheduler = TrafficScheduler(19, 256, 4, 3, 3, 2048).to(dev)
+    state_value_critic = StateValueCritic(19, 256, 4, 3, 3, 2048).to(dev)
+    shared_state_feature_extractor = state_value_critic.state_feature_extractor
+
+    # load model
     # 模型文件的路径
-    scheduler_model_path = 'traffic_scheduler_model.pt'
-    critic_model_path = 'state_value_critic_model.pt'
+    scheduler_model_path = f'/data/qwx/goofy-hydra/a3c/saved_models/trafficScheduler/traffic_scheduler_model_traced_{epsisode_last}.pt'
+    critic_model_path = f'/data/qwx/goofy-hydra/a3c/saved_models/networkValue/state_value_critic_model_traced_{epsisode_last}.pt'
 
     # 检查 traffic_scheduler_model.pth 是否存在
     if os.path.exists(scheduler_model_path):
@@ -31,16 +44,8 @@ def load_checkpoint(traffic_scheduler,state_value_critic):
     else:
         print("state_value_critic 模型文件不存在，未载入模型")
 
-def training():
-    dev = torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
-
-    # define model
-    traffic_scheduler = TrafficScheduler(19, 256, 4, 3, 3, 2048).to(dev)
-    state_value_critic = StateValueCritic(19, 256, 4, 3, 3, 2048).to(dev)
-    shared_state_feature_extractor = state_value_critic.state_feature_extractor
-
     # load data
-    dataset = A2CDataSet("data/DL2-40M40ms-90M90ms_82_bbr_202310.csv")
+    dataset = A2CDataSet(dataset_path)
     dataloader = DataLoader(dataset)
 
     # define loss function and hyperparameters
@@ -49,15 +54,12 @@ def training():
     optimizer_critic = torch.optim.Adam(state_value_critic.parameters(), lr=1e-3)
 
     # train loop
-    start_episode = 0
-    num_episodes = 1
+    traffic_scheduler.train()
+    state_value_critic.train()
+    start_episode = (int)(epsisode_input)
+    num_episodes = start_episode + 1
     reward_expectation = 0
-
     for episode in range(start_episode, num_episodes):
-        episode_loss_scheduler = 0
-        episode_loss_critic = 0
-        reward_expectation = 0
-
         for states, next_n_states, reward in dataloader:
             episode_loss_scheduler = 0
             episode_loss_critic = 0
@@ -92,17 +94,29 @@ def training():
             episode_loss_scheduler = -log_action_probs * dt**2
 
             episode_loss_critic = dt**2
-            print("episode_loss_scheduler:",episode_loss_scheduler,"\t episode_loss_critic:", episode_loss_critic)
+            print("episode_loss_scheduler:",episode_loss_scheduler.item(),"\t episode_loss_critic:", episode_loss_critic.item())
 
             # 检查是否满足保存模型的条件
             if episode_loss_scheduler < 0.01 and episode_loss_critic < 0.01:
-                # 保存 traffic_scheduler 模型
-                torch.save(traffic_scheduler.state_dict(), 'traffic_scheduler_model.pt')
+                src = torch.rand(1, 100, 19).to(dev)
+                traffic_scheduler.eval()
+                traced_script_module = torch.jit.trace(traffic_scheduler, src)
+                torch.save(
+                    traffic_scheduler.state_dict(), "/data/qwx/goofy-hydra/a3c/saved_models/trafficScheduler/traffic_scheduler_model_convergence.pt"
+                )
+                # save state_value_critic model
+                src = torch.rand(1, 100, 19).to(dev)
+                state_value_critic.eval()
+                traced_script_module = torch.jit.trace(state_value_critic, src)
+                torch.save(
+                    state_value_critic.state_dict(), "/data/qwx/goofy-hydra/a3c/saved_models/networkValue/state_value_critic_model_convergence.pt"
+                )
 
-                # 保存 state_value_critic 模型
-                torch.save(state_value_critic.state_dict(), 'state_value_critic_model.pt')
+                print("模型已保存，因为 episode_loss_scheduler and episode_loss_critic < 0.01")
 
-                print("模型已保存，因为 episode_loss_scheduler < 1")
+                traffic_scheduler.train()
+                state_value_critic.train()
+
                 
             # update loss
             # episode_loss_scheduler += loss_scheduler.item()
@@ -117,11 +131,19 @@ def training():
             episode_loss_critic.backward()
             optimizer_critic.step()
 
-        # save model
-        torch.save(traffic_scheduler.state_dict(), 'traffic_scheduler_model.pt')
-
-        # 保存 state_value_critic 模型
-        torch.save(state_value_critic.state_dict(), 'state_value_critic_model.pt')
+    # save model
+    src = torch.rand(1, 100, 19).to(dev)
+    traffic_scheduler.eval()
+    traced_script_module = torch.jit.trace(traffic_scheduler, src)
+    torch.save(
+        traffic_scheduler.state_dict(), f"/data/qwx/goofy-hydra/a3c/saved_models/trafficScheduler/traffic_scheduler_model_traced_{epsisode_input}.pt"
+    )
+    # save state_value_critic model
+    state_value_critic.eval()
+    traced_script_module = torch.jit.trace(state_value_critic, src)
+    torch.save(
+        state_value_critic.state_dict(), f"/data/qwx/goofy-hydra/a3c/saved_models/networkValue/state_value_critic_model_traced_{epsisode_input}.pt"
+    )
 
 def choose_action_vectorized(actions: torch.Tensor) -> torch.Tensor:
     # Initialize a Bernoulli distribution with the actions tensor
@@ -175,4 +197,10 @@ def test_action():
     print(action_probs)
 
 if __name__ == "__main__":
-    training()
+    epsiode = sys.argv[1]
+    dataset_path = sys.argv[2]
+
+    training(epsiode, dataset_path)
+
+    serv_dev = torch.device("cpu")
+    rept_file_path = reload_model("/data/qwx/goofy-hydra/Croc_smr_20231013_all_forRL/trafficScheduler/", serv_dev, epsiode)

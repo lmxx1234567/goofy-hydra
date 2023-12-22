@@ -1,7 +1,12 @@
 .DS_Store
 *.pyc
+Croc_smr_20231013_all_forRL/
+paperneed/
+TestLoad/
+asc/saved_models/
 data/
 saved_models/
 .vscode/
 __pycache__/
 runs/
+a3c/agent.py
